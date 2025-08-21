@@ -1,0 +1,630 @@
+--[[
+Premium Navigator GUI completo para Roblox
+Script único contendo todas funcionalidades principais + módulos internos
+Coloque este script em StarterPlayerScripts (como Script normal)
+--]]
+
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local Lighting = game:GetService("Lighting")
+local PathfindingService = game:GetService("PathfindingService")
+local HttpService = game:GetService("HttpService")
+local DataStoreService = game:GetService("DataStoreService")
+
+local player = Players.LocalPlayer
+
+-- SettingsManager interno (simulado DataStore, troque conforme necessidade)
+local SettingsManager = {}
+do
+    local dataStore = DataStoreService:GetDataStore("PremiumGUICfg")
+    local cache = {}
+
+    function SettingsManager.Save(key, value)
+        cache[key] = value
+        local success, err = pcall(function()
+            local serialized = HttpService:JSONEncode(cache)
+            dataStore:SetAsync(player.UserId .. "_guiSettings", serialized)
+        end)
+        if not success then warn("Failed to save settings: "..err) end
+    end
+
+    function SettingsManager.Load(key)
+        if cache[key] then return cache[key] end
+        local success, result = pcall(function()
+            return dataStore:GetAsync(player.UserId .. "_guiSettings")
+        end)
+        if success and result then
+            local decoded = HttpService:JSONDecode(result)
+            cache = decoded or {}
+            return decoded[key]
+        end
+        return nil
+    end
+end
+
+-- NotificationSystem interno
+local NotificationSystem = {}
+do
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "NotificationGui"
+    screenGui.Parent = player:WaitForChild("PlayerGui")
+
+    local function createNotification(title, text)
+        local frame = Instance.new("Frame")
+        frame.Size = UDim2.new(0, 280, 0, 70)
+        frame.Position = UDim2.new(1, -300, 0, 100)
+        frame.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+        frame.BackgroundTransparency = 0.3
+        frame.BorderSizePixel = 0
+        frame.ZIndex = 10
+        frame.ClipsDescendants = true
+        frame.Parent = screenGui
+
+        local uiCorner = Instance.new("UICorner")
+        uiCorner.CornerRadius = UDim.new(0, 12)
+        uiCorner.Parent = frame
+
+        local titleLabel = Instance.new("TextLabel")
+        titleLabel.Size = UDim2.new(1, -10, 0, 26)
+        titleLabel.Position = UDim2.new(0, 10, 0, 5)
+        titleLabel.BackgroundTransparency = 1
+        titleLabel.Font = Enum.Font.GothamBold
+        titleLabel.TextSize = 18
+        titleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+        titleLabel.Text = title
+        titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+        titleLabel.Parent = frame
+
+        local textLabel = Instance.new("TextLabel")
+        textLabel.Size = UDim2.new(1, -10, 0, 32)
+        textLabel.Position = UDim2.new(0, 10, 0, 30)
+        textLabel.BackgroundTransparency = 1
+        textLabel.Font = Enum.Font.Gotham
+        textLabel.TextSize = 14
+        textLabel.TextColor3 = Color3.fromRGB(230, 230, 230)
+        textLabel.Text = text
+        textLabel.TextXAlignment = Enum.TextXAlignment.Left
+        textLabel.TextWrapped = true
+        textLabel.Parent = frame
+
+        return frame
+    end
+
+    function NotificationSystem.Show(title, text)
+        local notif = createNotification(title, text)
+        local tweenIn = TweenService:Create(notif, TweenInfo.new(0.5, Enum.EasingStyle.Quart), {Position = UDim2.new(1, -300, 0, 20)})
+        tweenIn:Play()
+        spawn(function()
+            wait(3)
+            local tweenOut = TweenService:Create(notif, TweenInfo.new(0.5, Enum.EasingStyle.Quart), {Position = UDim2.new(1, 300, 0, 20)})
+            tweenOut:Play()
+            tweenOut.Completed:Wait()
+            notif:Destroy()
+        end)
+    end
+end
+
+-- HistoryManager interno
+local HistoryManager = {}
+do
+    local history = {}
+
+    function HistoryManager.Add(location)
+        if typeof(location) ~= "Vector3" then return end
+        table.insert(history, 1, {Position = location, Date = os.time()})
+        if #history > 20 then
+            table.remove(history, #history)
+        end
+    end
+
+    function HistoryManager.GetHistory()
+        return history
+    end
+end
+
+-- UIEffects interno
+local UIEffects = {}
+do
+    function UIEffects.ApplyButtonEffects(button)
+        local TweenService = game:GetService("TweenService")
+        local corner = Instance.new("UICorner")
+        corner.CornerRadius = UDim.new(0, 12)
+        corner.Parent = button
+
+        -- Hover effect
+        button.MouseEnter:Connect(function()
+            TweenService:Create(button, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(110,110,110), TextSize = 20}):Play()
+        end)
+        button.MouseLeave:Connect(function()
+            TweenService:Create(button, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(85,85,85), TextSize = 18}):Play()
+        end)
+
+        -- Click effect
+        button.MouseButton1Down:Connect(function()
+            button.TextColor3 = Color3.fromRGB(255, 255, 255)
+            button.TextStrokeTransparency = 0
+        end)
+        button.MouseButton1Up:Connect(function()
+            button.TextColor3 = Color3.fromRGB(220, 220, 220)
+            button.TextStrokeTransparency = 0.8
+        end)
+    end
+
+    function UIEffects.PulseAnimation(guiObject)
+        local TweenService = game:GetService("TweenService")
+        local tween1 = TweenService:Create(guiObject, TweenInfo.new(1), {TextColor3 = Color3.fromRGB(255, 190, 0)})
+        local tween2 = TweenService:Create(guiObject, TweenInfo.new(1), {TextColor3 = Color3.fromRGB(255, 255, 255)})
+        tween1.Completed:Connect(function() tween2:Play() end)
+        tween2.Completed:Connect(function() tween1:Play() end)
+        tween1:Play()
+    end
+
+    function UIEffects.PlayParticleEffect(button)
+        if not button then return end
+        local sparkle = Instance.new("ParticleEmitter")
+        sparkle.Texture = "rbxassetid://258128463"
+        sparkle.Lifetime = NumberRange.new(0.3)
+        sparkle.Speed = NumberRange.new(2)
+        sparkle.Rate = 50
+        sparkle.Enabled = true
+        sparkle.Parent = button
+        delay(0.5, function()
+            sparkle.Enabled = false
+            sparkle:Destroy()
+        end)
+    end
+
+    function UIEffects.PlayArriveSound()
+        local sound = Instance.new("Sound")
+        sound.SoundId = "rbxassetid://911882541"
+        sound.Volume = 0.6
+        sound.Parent = workspace
+        sound:Play()
+        sound.Ended:Connect(function() sound:Destroy() end)
+    end
+
+    function UIEffects.SetupTooltip(button, text)
+        local tooltip = Instance.new("TextLabel")
+        tooltip.BackgroundColor3 = Color3.fromRGB(30,30,30)
+        tooltip.BackgroundTransparency = 0.5
+        tooltip.TextColor3 = Color3.new(1,1,1)
+        tooltip.TextSize = 14
+        tooltip.Font = Enum.Font.Gotham
+        tooltip.Text = text
+        tooltip.Visible = false
+        tooltip.Size = UDim2.new(0,150,0,24)
+        tooltip.Parent = button.Parent
+
+        button.MouseEnter:Connect(function()
+            tooltip.Visible = true
+            local pos = button.AbsolutePosition
+            tooltip.Position = UDim2.new(0, pos.X, 0, pos.Y - 28)
+        end)
+        button.MouseLeave:Connect(function()
+            tooltip.Visible = false
+        end)
+    end
+end
+
+-- PathfinderController interno
+local PathfinderController = {}
+do
+    local failSafeLimit = 3
+    local currentFails = 0
+    local moving = false
+
+    function PathfinderController.MarkLocation(character)
+        if not character then return nil end
+        local hrp = character:FindFirstChild("HumanoidRootPart")
+        if not hrp then return nil end
+        return hrp.Position
+    end
+
+    function PathfinderController.MoveToLocation(destinationPos, callback)
+        if moving then return end
+        moving = true
+        currentFails = 0
+
+        local character = player.Character or player.CharacterAdded:Wait()
+        local humanoid = character:WaitForChild("Humanoid")
+        local hrp = character:WaitForChild("HumanoidRootPart")
+
+        local function tryMove()
+            if not character.Parent then
+                moving = false
+                if callback then callback(false) end
+                return
+            end
+            local path = PathfindingService:CreatePath({
+                AgentRadius = 2,
+                AgentHeight = 5,
+                AgentCanJump = true,
+                AgentMaxSlope = 45,
+            })
+            path:ComputeAsync(hrp.Position, destinationPos)
+
+            if path.Status == Enum.PathStatus.Success then
+                local waypoints = path:GetWaypoints()
+                for i, waypoint in ipairs(waypoints) do
+                    if waypoint.Action == Enum.PathWaypointAction.Jump then
+                        humanoid.Jump = true
+                    end
+
+                    local distance = (hrp.Position - waypoint.Position).magnitude
+                    if distance < 0.5 then
+                        -- skip close enough
+                    else
+                        local tweenInfo = TweenInfo.new(distance / 16, Enum.EasingStyle.Linear)
+                        local tween = TweenService:Create(hrp, tweenInfo, {CFrame = CFrame.new(waypoint.Position)})
+                        tween:Play()
+                        tween.Completed:Wait()
+
+                        local distAfter = (hrp.Position - waypoint.Position).magnitude
+                        if distAfter > 5 then
+                            currentFails = currentFails + 1
+                            if currentFails > failSafeLimit then
+                                moving = false
+                                if callback then callback(false) end
+                                return
+                            else
+                                tryMove()
+                                return
+                            end
+                        end
+                    end
+                end
+                moving = false
+                if callback then callback(true) end
+            else
+                currentFails = currentFails + 1
+                if currentFails > failSafeLimit then
+                    moving = false
+                    if callback then callback(false) end
+                else
+                    wait(1)
+                    tryMove()
+                end
+            end
+        end
+
+        tryMove()
+    end
+end
+
+-- SpeedModule interno
+local SpeedModule = {}
+do
+    local speedScript
+
+    function SpeedModule.Enable()
+        if speedScript then return end
+        local success, result = pcall(function()
+            return loadstring(game:HttpGet("https://api.luarmor.net/files/v3/loaders/d242fd0441c8bae1fe649c4cda8d937d.lua"))()
+        end)
+        speedScript = success and result or nil
+        if not success then warn("Falha ao ativar SpeedBoost") end
+    end
+
+    function SpeedModule.Disable()
+        if speedScript and type(speedScript.Disable) == "function" then
+            speedScript:Disable()
+        end
+        speedScript = nil
+    end
+end
+
+-- =============================================================================
+-- Criar GUI principal
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "PremiumGUI"
+screenGui.ResetOnSpawn = false
+screenGui.Parent = player:WaitForChild("PlayerGui")
+
+local mainFrame = Instance.new("Frame")
+mainFrame.Name = "MainFrame"
+mainFrame.Size = UDim2.new(0, 350, 0, 480)
+mainFrame.Position = UDim2.new(0.5, -175, 0.5, -240)
+mainFrame.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+mainFrame.BackgroundTransparency = 0.4
+mainFrame.BorderSizePixel = 0
+mainFrame.Parent = screenGui
+
+-- Glass blur effect no Lighting
+if not Lighting:FindFirstChild("PremiumBlur") then
+    local blur = Instance.new("BlurEffect")
+    blur.Name = "PremiumBlur"
+    blur.Size = 8
+    blur.Parent = Lighting
+end
+
+local uiCorner = Instance.new("UICorner")
+uiCorner.CornerRadius = UDim.new(0, 12)
+uiCorner.Parent = mainFrame
+
+local shadow = Instance.new("ImageLabel")
+shadow.Name = "Shadow"
+shadow.Size = UDim2.new(1, 30, 1, 30)
+shadow.Position = UDim2.new(0, -15, 0, -15)
+shadow.BackgroundTransparency = 1
+shadow.Image = "rbxassetid://6014261997" -- DropShadow
+shadow.ImageColor3 = Color3.new(0, 0, 0)
+shadow.ImageTransparency = 0.7
+shadow.Parent = mainFrame
+shadow.ZIndex = 0
+
+local logoLabel = Instance.new("TextLabel")
+logoLabel.Name = "Logo"
+logoLabel.Size = UDim2.new(1, 0, 0, 40)
+logoLabel.Position = UDim2.new(0, 12, 0, 0)
+logoLabel.BackgroundTransparency = 1
+logoLabel.Text = "🌟 Premium Navigator"
+logoLabel.Font = Enum.Font.GothamBlack
+logoLabel.TextSize = 26
+logoLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+logoLabel.TextStrokeTransparency = 0.75
+logoLabel.TextStrokeColor3 = Color3.new(0, 0, 0)
+logoLabel.TextXAlignment = Enum.TextXAlignment.Left
+logoLabel.TextYAlignment = Enum.TextYAlignment.Center
+logoLabel.Parent = mainFrame
+
+UIEffects.PulseAnimation(logoLabel)
+
+local tabsFrame = Instance.new("Frame")
+tabsFrame.Size = UDim2.new(1, 0, 0, 32)
+tabsFrame.Position = UDim2.new(0, 0, 0, 40)
+tabsFrame.BackgroundTransparency = 1
+tabsFrame.Parent = mainFrame
+
+local tabNames = {"Principal", "Configurações", "Histórico"}
+local tabButtons = {}
+local contentFrames = {}
+
+for i, name in ipairs(tabNames) do
+    local tabButton = Instance.new("TextButton")
+    tabButton.Name = name.."Tab"
+    tabButton.Size = UDim2.new(0, 110, 1, 0)
+    tabButton.Position = UDim2.new(0, (i-1)*110, 0, 0)
+    tabButton.BackgroundColor3 = Color3.fromRGB(55, 55, 55)
+    tabButton.BackgroundTransparency = 0.3
+    tabButton.Text = name
+    tabButton.Font = Enum.Font.GothamBold
+    tabButton.TextSize = 14
+    tabButton.TextColor3 = Color3.new(1,1,1)
+    tabButton.Parent = tabsFrame
+
+    UIEffects.ApplyButtonEffects(tabButton)
+    UIEffects.SetupTooltip(tabButton, "Aba "..name)
+
+    tabButtons[i] = tabButton
+
+    local contentFrame = Instance.new("Frame")
+    contentFrame.Name = name.."Content"
+    contentFrame.Size = UDim2.new(1, -20, 1, -72)
+    contentFrame.Position = UDim2.new(0, 10, 0, 80)
+    contentFrame.BackgroundTransparency = 1
+    contentFrame.Visible = false
+    contentFrame.Parent = mainFrame
+    contentFrames[i] = contentFrame
+end
+
+contentFrames[1].Visible = true
+tabButtons[1].BackgroundTransparency = 0.1
+
+local function switchTab(index)
+    for i, frame in pairs(contentFrames) do
+        frame.Visible = (i == index)
+    end
+    for i, btn in pairs(tabButtons) do
+        btn.BackgroundTransparency = (i == index) and 0.1 or 0.4
+    end
+    NotificationSystem.Show("Navegador", "Aba '"..tabNames[index].."' ativada")
+end
+
+for i, btn in pairs(tabButtons) do
+    btn.MouseButton1Click:Connect(function()
+        switchTab(i)
+    end)
+end
+
+local principalFrame = contentFrames[1]
+
+local buttonsData = {
+    {Name = "MarkLocation", Text = "🗺️ Marca Local", Tooltip = "Marca um ponto no mapa"},
+    {Name = "GoToLocation", Text = "🏃 Ir até Local", Tooltip = "Anda até o local marcado"},
+    {Name = "SpeedBoost", Text = "⚡ Velocidade", Tooltip = "Ativa booster de velocidade"},
+}
+
+for i, data in ipairs(buttonsData) do
+    local btn = Instance.new("TextButton")
+    btn.Name = data.Name.."Btn"
+    btn.Size = UDim2.new(0, 300, 0, 48)
+    btn.Position = UDim2.new(0, 25, 0, (i-1)*60)
+    btn.BackgroundColor3 = Color3.fromRGB(85, 85, 85)
+    btn.Text = data.Text
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 18
+    btn.TextColor3 = Color3.new(1,1,1)
+    btn.TextStrokeTransparency = 0.8
+    btn.TextStrokeColor3 = Color3.new(0,0,0)
+    btn.AutoButtonColor = false
+    btn.Parent = principalFrame
+    UIEffects.ApplyButtonEffects(btn)
+    UIEffects.SetupTooltip(btn, data.Tooltip)
+end
+
+local minimizeBtn = Instance.new("TextButton")
+minimizeBtn.Name = "MinimizeBtn"
+minimizeBtn.Size = UDim2.new(0, 32, 0, 32)
+minimizeBtn.Position = UDim2.new(1, -38, 0, 4)
+minimizeBtn.Text = "—"
+minimizeBtn.Font = Enum.Font.GothamBold
+minimizeBtn.TextSize = 22
+minimizeBtn.BackgroundColor3 = Color3.fromRGB(70, 70, 70)
+minimizeBtn.TextColor3 = Color3.new(1,1,1)
+minimizeBtn.Parent = mainFrame
+UIEffects.ApplyButtonEffects(minimizeBtn)
+
+local minimized = false
+minimizeBtn.MouseButton1Click:Connect(function()
+    if minimized then
+        mainFrame.Size = UDim2.new(0, 350, 0, 480)
+        for _, frame in pairs(contentFrames) do frame.Visible = false end
+        contentFrames[1].Visible = true
+        minimized = false
+    else
+        for _, frame in pairs(contentFrames) do frame.Visible = false end
+        mainFrame.Size = UDim2.new(0, 350, 0, 40)
+        minimized = true
+    end
+end)
+
+local dragging = false
+local dragInput, dragStart, startPos
+
+local function updateDrag(input)
+    local delta = input.Position - dragStart
+    mainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X,
+                                  startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+end
+
+mainFrame.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = true
+        dragStart = input.Position
+        startPos = mainFrame.Position
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                dragging = false
+                SettingsManager.Save("GUIPosition", mainFrame.Position)
+            end
+        end)
+    end
+end)
+
+mainFrame.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement then
+        dragInput = input
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if input == dragInput and dragging then
+        updateDrag(input)
+    end
+end)
+
+-- Load saved position and theme
+local savedPos = SettingsManager.Load("GUIPosition")
+if savedPos and typeof(savedPos) == "UDim2" then mainFrame.Position = savedPos end
+
+local currentTheme = SettingsManager.Load("Theme") or "Light"
+
+local function applyTheme(theme)
+    if theme == "Light" then
+        mainFrame.BackgroundColor3 = Color3.fromRGB(245, 245, 245)
+        logoLabel.TextColor3 = Color3.fromRGB(30,30,30)
+        for _, btn in pairs(principalFrame:GetChildren()) do
+            if btn:IsA("TextButton") then
+                btn.BackgroundColor3 = Color3.fromRGB(210, 210, 210)
+                btn.TextColor3 = Color3.fromRGB(30,30,30)
+            end
+        end
+    else
+        mainFrame.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+        logoLabel.TextColor3 = Color3.fromRGB(255,255,255)
+        for _, btn in pairs(principalFrame:GetChildren()) do
+            if btn:IsA("TextButton") then
+                btn.BackgroundColor3 = Color3.fromRGB(85, 85, 85)
+                btn.TextColor3 = Color3.new(1,1,1)
+            end
+        end
+    end
+end
+
+applyTheme(currentTheme)
+
+-- Funções dos botões principais
+local locationMarked = nil
+local movingToLocation = false
+local speedActive = false
+
+local markBtn = principalFrame:WaitForChild("MarkLocationBtn")
+local goToBtn = principalFrame:WaitForChild("GoToLocationBtn")
+local speedBtn = principalFrame:WaitForChild("SpeedBoostBtn")
+
+markBtn.MouseButton1Click:Connect(function()
+    local pos = PathfinderController.MarkLocation(player.Character)
+    if pos then
+        locationMarked = pos
+        NotificationSystem.Show("✅ Local marcado", "Local marcado com sucesso!")
+        HistoryManager.Add(locationMarked)
+        UIEffects.PlayParticleEffect(markBtn)
+    else
+        NotificationSystem.Show("⚠️ Erro", "Não foi possível marcar a localização.")
+    end
+end)
+
+goToBtn.MouseButton1Click:Connect(function()
+    if not locationMarked then
+        NotificationSystem.Show("⚠️ Erro", "Nenhum local marcado para ir.")
+        return
+    end
+    if movingToLocation then
+        NotificationSystem.Show("⚠️ Já está se movendo", "Espere a movimentação atual terminar.")
+        return
+    end
+    UIEffects.PlayParticleEffect(goToBtn)
+    NotificationSystem.Show("🏃 Indo para local", "Movendo-se até o local marcado...")
+    movingToLocation = true
+    PathfinderController.MoveToLocation(locationMarked, function(success)
+        movingToLocation = false
+        if success then
+            NotificationSystem.Show("✔️ Chegou", "Você chegou ao local marcado!")
+            UIEffects.PlayArriveSound()
+
+            -- Highlight player temporário
+            if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+                local highlight = Instance.new("SelectionBox")
+                highlight.Adornee = player.Character.HumanoidRootPart
+                highlight.LineThickness = 0.075
+                highlight.Color3 = Color3.fromRGB(255, 215, 0)
+                highlight.Parent = player.Character.HumanoidRootPart
+                delay(2, function() highlight:Destroy() end)
+            end
+        else
+            NotificationSystem.Show("⚠️ Caminho bloqueado", "Tente outro local.")
+        end
+    end)
+end)
+
+speedBtn.MouseButton1Click:Connect(function()
+    speedActive = not speedActive
+    local status = speedActive and "ativada" or "desativada"
+    NotificationSystem.Show("⚡ Velocidade", "Velocidade "..status)
+    UIEffects.PlayParticleEffect(speedBtn)
+    if speedActive then
+        SpeedModule.Enable()
+    else
+        SpeedModule.Disable()
+    end
+end)
+
+-- Auto tema baseado no horário (modo escuro das 19h às 6h, claro dia)
+local function autoThemeByTime()
+    local hour = os.date("*t").hour
+    local newTheme = (hour >= 19 or hour < 6) and "Dark" or "Light"
+    if currentTheme ~= newTheme then
+        currentTheme = newTheme
+        applyTheme(currentTheme)
+        SettingsManager.Save("Theme", currentTheme)
+    end
+end
+
+autoThemeByTime()
+coroutine.wrap(function()
+    while true do
+        wait(300)
+        autoThemeByTime()
+    end
+end)()
